@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.8
+
+- 修复 WorkBuddy 5.6+ 当前登录扫不进来：`workbuddy-desktop.info` 里的令牌改成 `$wbEncrypted` 后，插件只认明文字符串，加密文件被直接丢掉，池里只剩旧的明文快照。现在向本机已安装的 WorkBuddy 可执行文件要解密密钥再读；解不开就跳过该文件，不会把已登录报成未登录。
+
 ## 1.0.7
 
 - 修复 `net::ERR_CONNECTION_REFUSED`（宿主拿到的服务地址指向一个没人监听的端口）。

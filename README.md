@@ -68,6 +68,8 @@ pwsh -File tools/pack.ps1     # 产出 dist/local.pi-desktop-workbuddy-<版本>.
 
 因此多账号 = **在桌面 App 里逐个登录 / 切换账号**，然后点面板上的「重新检测账号」（或重启 PI-Desktop），新账号就会成为池成员。
 
+WorkBuddy 5.6 起，当前登录文件里的令牌是 `$wbEncrypted`。插件会向本机已安装的 WorkBuddy 可执行文件要解密密钥再读；解不开就跳过该文件，不会把已登录报成未登录。
+
 > 两个版本各自独立：国内版账号不能登录国际版，反之亦然，需要分别注册。
 
 ---

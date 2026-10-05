@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "local.pi-desktop-workbuddy",
   "name": "pi-desktop-workbuddy",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "把 WorkBuddy 桌面 App 里登录过的所有账号自动并入一个模型池：你在桌面登录的每个账号都会成为池成员，某个账号被限流（429）时请求自动切到下一个可用账号。国内版与国际版各自独立成组，可同时使用。",
   "author": "eric8bit (PI-Desktop port of aosi526/dsh-workbuddy-xdpool)",
   "license": "MIT",
@@ -24,15 +24,15 @@
     "en": {
       "name": "pi-desktop-workbuddy",
       "description": "Merge every account you have signed in to in the WorkBuddy desktop app into one model pool: each sign-in becomes a pool member automatically, and when an account is rate-limited (HTTP 429) the request moves to the next available one. The domestic and international editions are separate groups and can be used at the same time.",
-      "safetyNotes": "Read-only discovery: it reuses the WorkBuddy desktop app's own saved sign-ins and never starts a separate login. It reads only the app's auth files under the local app-data folder, keeps no credential copies of its own, and sends tokens nowhere except to Tencent's own WorkBuddy/CodeBuddy endpoints. Chat requests are served from a loopback-only endpoint (127.0.0.1, fixed high port) that the plugin itself runs and that attaches the token upstream. No telemetry and no third-party server."
+      "safetyNotes": "Read-only discovery: it reuses the WorkBuddy desktop app's own saved sign-ins and never starts a separate login. It reads only the app's auth files under the local app-data folder. WorkBuddy 5.6+ seals those fields; the plugin asks the installed WorkBuddy executable for the at-rest key (run as plain Node) and keeps that key in memory only. Tokens are sent nowhere except to Tencent's own WorkBuddy/CodeBuddy endpoints. Chat requests are served from a loopback-only endpoint (127.0.0.1, fixed high port) that the plugin itself runs and that attaches the token upstream. No telemetry and no third-party server."
     },
     "zh-CN": {
       "name": "pi-desktop-workbuddy",
       "description": "把 WorkBuddy 桌面 App 里登录过的所有账号自动并入一个模型池：每个登录过的账号都会自动成为池成员；某个账号被限流（429）时，请求自动切到下一个可用账号。国内版与国际版是两组独立供应商，可同时使用。",
-      "safetyNotes": "只读发现：复用 WorkBuddy 桌面 App 自己的登录状态，不会另行发起登录。只读取本机应用数据目录下该 App 自己的登录文件，不另存任何凭据副本；令牌除发往腾讯 WorkBuddy / CodeBuddy 自己的接口外不会去任何地方。对话请求由插件在本机回环地址（127.0.0.1，固定高位端口）上运行的端点提供，令牌由该端点在上行时附加。无遥测、无第三方服务器。"
+      "safetyNotes": "只读发现：复用 WorkBuddy 桌面 App 自己的登录状态，不会另行发起登录。只读取本机应用数据目录下该 App 自己的登录文件。5.6 起这些字段被加密，插件会以普通 Node 方式询问本机已安装的 WorkBuddy 可执行文件拿到解密密钥，密钥只留在内存。令牌除发往腾讯 WorkBuddy / CodeBuddy 自己的接口外不会去任何地方。对话请求由插件在本机回环地址（127.0.0.1，固定高位端口）上运行的端点提供，令牌由该端点在上行时附加。无遥测、无第三方服务器。"
     }
   },
-  "safetyNotes": "Read-only discovery of the WorkBuddy desktop app's own saved sign-ins (local app-data only; no credential copies are kept). Upstream traffic goes only to Tencent WorkBuddy / CodeBuddy endpoints. Chat requests are served from a loopback-only endpoint (127.0.0.1, fixed high port) that the plugin runs and that requires either the host's key-less sentinel or this run's per-process secret. No telemetry, no third-party server.",
+  "safetyNotes": "Read-only discovery of the WorkBuddy desktop app's own saved sign-ins (local app-data only; no credential copies are kept). WorkBuddy 5.6+ encrypted fields are opened with a key asked from the installed WorkBuddy executable and kept in memory only. Upstream traffic goes only to Tencent WorkBuddy / CodeBuddy endpoints. Chat requests are served from a loopback-only endpoint (127.0.0.1, fixed high port) that the plugin runs and that requires either the host's key-less sentinel or this run's per-process secret. No telemetry, no third-party server.",
   "ui": {
     "panel": "renderer/index.html",
     "title": {
