@@ -15,6 +15,7 @@ import { readFile, readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { regionOf, type WorkBuddyRegion } from './upstream'
+import { encryptedFieldOpener, isEncryptedFieldWrapper } from './at-rest'
 
 /** Minimal upstream surface the pool needs to refresh a token (no circular import). */
 export interface TokenRefresher {
@@ -131,7 +132,11 @@ function optionalString(value: unknown): string | undefined {
  * `{"auth":{...},"account":{...}}` and the flat panel shape; returns undefined
  * when there is no usable access token.
  */
-export function parseWorkBuddyAuth(text: string, sourcePath: string): WorkBuddyCredential | undefined {
+export function parseWorkBuddyAuth(
+  text: string,
+  sourcePath: string,
+  decrypt?: (value: unknown) => string,
+): WorkBuddyCredential | undefined {
   let parsed: unknown
   try {
     parsed = JSON.parse(text)
@@ -154,30 +159,28 @@ export function parseWorkBuddyAuth(text: string, sourcePath: string): WorkBuddyC
     identity = document
   }
 
-  const accessToken = typeof auth['accessToken'] === 'string' ? auth['accessToken'] : ''
+  const accessField = decryptableString(auth['accessToken'], decrypt)
+  const accessToken = accessField.value
   if (accessToken === '') return undefined
 
-  // Skip documents whose refresh window has already closed: they cannot recover.
   const refreshExpiresAtMs =
     typeof auth['refreshExpiresAt'] === 'number' ? expiryToMs(auth['refreshExpiresAt']) : undefined
   if (refreshExpiresAtMs !== undefined && refreshExpiresAtMs > 0 && refreshExpiresAtMs < Date.now()) {
     return undefined
   }
 
-  // The upstream's own issue time, the only signal that stays truthful after a
-  // token is revoked: credential selection prefers it over the stored expiry,
-  // which a dead backup can claim arbitrarily far into the future.
   const lastRefreshAtMs = typeof auth['lastRefreshTime'] === 'number'
     ? expiryToMs(auth['lastRefreshTime'])
     : undefined
+  const nickname = optionalString(decryptableString(identity['nickname'], decrypt).value)
 
   return {
     accessToken,
-    refreshToken: typeof auth['refreshToken'] === 'string' ? auth['refreshToken'] : '',
+    refreshToken: decryptableString(auth['refreshToken'], decrypt).value,
     expiresAtMs: typeof auth['expiresAt'] === 'number' ? expiryToMs(auth['expiresAt']) : 0,
     ...refreshExpiresAtMs === undefined ? {} : { refreshExpiresAtMs },
     ...lastRefreshAtMs === undefined ? {} : { lastRefreshAtMs },
-    ...optionalString(identity['nickname']) === undefined ? {} : { nickname: optionalString(identity['nickname']) },
+    ...nickname === undefined ? {} : { nickname },
     ...optionalString(identity['uin']) === undefined ? {} : { uin: optionalString(identity['uin']) },
     ...optionalString(identity['uid']) === undefined ? {} : { uid: optionalString(identity['uid']) },
     ...optionalString(identity['enterpriseId']) === undefined
@@ -186,6 +189,28 @@ export function parseWorkBuddyAuth(text: string, sourcePath: string): WorkBuddyC
     domain: typeof auth['domain'] === 'string' ? auth['domain'] : '',
     sourcePath,
   }
+}
+
+/**
+ * A credential field is either a plain string (older builds) or the desktop
+ * app's `$wbEncrypted` envelope (5.6.0+, both platforms). An encrypted field
+ * that cannot be opened is an empty string so the caller skips the file
+ * instead of treating a sealed token as "not signed in".
+ */
+function decryptableString(
+  value: unknown,
+  decrypt?: (value: unknown) => string,
+): { value: string; encrypted: boolean; failed: boolean } {
+  if (typeof value === 'string') return { value, encrypted: false, failed: false }
+  if (isEncryptedFieldWrapper(value)) {
+    if (decrypt === undefined) return { value: '', encrypted: true, failed: true }
+    try {
+      return { value: decrypt(value), encrypted: true, failed: false }
+    } catch {
+      return { value: '', encrypted: true, failed: true }
+    }
+  }
+  return { value: '', encrypted: false, failed: false }
 }
 
 /**
@@ -273,11 +298,14 @@ async function authFilesIn(dir: string): Promise<string[]> {
 }
 
 async function readCredential(path: string): Promise<WorkBuddyCredential | undefined> {
+  let text: string
   try {
-    return parseWorkBuddyAuth(await readFile(path, 'utf8'), path)
+    text = await readFile(path, 'utf8')
   } catch {
     return undefined
   }
+  const decrypt = text.includes('"$wbEncrypted"') ? await encryptedFieldOpener() : undefined
+  return parseWorkBuddyAuth(text, path, decrypt)
 }
 
 /** Every directory the pool should scan, in probe order. */

@@ -1,6 +1,6 @@
 {
   "name": "pi-desktop-workbuddy",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "private": true,
   "description": "PI-Desktop port of dsh-workbuddy-xdpool: every WorkBuddy desktop sign-in on this machine becomes one auto-failing-over model pool.",
   "author": "eric8bit",
