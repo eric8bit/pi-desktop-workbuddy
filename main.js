@@ -869,8 +869,12 @@ async function accountProbe(account, allowNetwork) {
   }
   if (cached !== undefined && Date.now() - cached.atMs < PROBE_TTL_MS) return cached.value;
   const value = {};
-  try {
-    const credits = await core.client.fetchCredits(account.credential);
+  const [creditsResult, checkinResult] = await Promise.allSettled([
+    core.client.fetchCredits(account.credential),
+    core.client.fetchCheckinStatus(account.credential),
+  ]);
+  if (creditsResult.status === 'fulfilled') {
+    const credits = creditsResult.value;
     value.credits = {
       ...credits.total === undefined ? {} : { total: credits.total },
       packages: (credits.packages || []).map((pack) => ({
@@ -884,11 +888,11 @@ async function accountProbe(account, allowNetwork) {
       ...credits.expiringSoon === undefined ? {} : { expiringSoon: credits.expiringSoon },
       ...credits.nearestExpiryMs === undefined ? {} : { nearestExpiryMs: credits.nearestExpiryMs },
     };
-  } catch (error) {
-    value.creditsError = safeMessage(error);
+  } else {
+    value.creditsError = safeMessage(creditsResult.reason);
   }
-  try {
-    const checkin = await core.client.fetchCheckinStatus(account.credential);
+  if (checkinResult.status === 'fulfilled') {
+    const checkin = checkinResult.value;
     value.checkin = {
       active: checkin.active,
       todayCheckedIn: checkin.todayCheckedIn,
@@ -899,8 +903,8 @@ async function accountProbe(account, allowNetwork) {
       nextStreakDay: checkin.nextStreakDay,
       streakBonusCredit: checkin.streakBonusCredit,
     };
-  } catch (error) {
-    value.checkinError = safeMessage(error);
+  } else {
+    value.checkinError = safeMessage(checkinResult.reason);
   }
   probeCache.set(account.id, { atMs: Date.now(), value });
   return value;

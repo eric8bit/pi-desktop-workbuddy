@@ -10,7 +10,8 @@
  * @module dsh-workbuddy-xdpool/accounts
  */
 
-import { createHash } from 'node:crypto'
+import { createDecipheriv, createHash } from 'node:crypto'
+import { existsSync } from 'node:fs'
 import { readFile, readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
@@ -28,11 +29,139 @@ export interface TokenRefresher {
 
 /** Live auth file name the WorkBuddy desktop app writes. */
 export const WORKBUDDY_LIVE_FILENAME = 'workbuddy-desktop.info'
+/** Live auth file names: both domestic and international desktop clients. */
+export const WORKBUDDY_LIVE_FILENAMES = new Set(['workbuddy-desktop.info', 'workbuddy-desktop-ai.info'])
 
 /** Snapshot files left behind by previous logins share this prefix. */
 
 /** Env override for the auth file or its directory. */
 export const WORKBUDDY_AUTH_FILE_ENV = 'WORKBUDDY_AUTH_FILE'
+
+/**
+ * Default at-rest secret key used by official WorkBuddy desktop releases.
+ * In WorkBuddy v5.5+, auth tokens in *.info files are saved encrypted at rest
+ * using AES-256-GCM.
+ */
+const DEFAULT_AT_REST_SECRET_KEY = 'Sik9U5aXhCdwTVEwsEySDOmDoB9r9ntFxHF1fst9LQI='
+
+let cachedKeyInfo: { key: Buffer; keyId: string } | null = null
+
+function getCandidateDesktopExecutables(): string[] {
+  const paths: string[] = []
+  if (process.env['WORKBUDDY_EXE_PATH']) {
+    paths.push(process.env['WORKBUDDY_EXE_PATH'])
+  }
+  if (process.platform === 'win32') {
+    const localAppData = process.env['LOCALAPPDATA'] || ''
+    const programFiles = process.env['ProgramFiles'] || 'C:\\Program Files'
+    const programFilesX86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)'
+    paths.push(
+      join(localAppData, 'Programs', 'WorkBuddy', 'WorkBuddy.exe'),
+      join(localAppData, 'Programs', 'WorkBuddyAI', 'WorkBuddyAI.exe'),
+      join(programFiles, 'WorkBuddy', 'WorkBuddy.exe'),
+      join(programFilesX86, 'WorkBuddy', 'WorkBuddy.exe'),
+    )
+  } else if (process.platform === 'darwin') {
+    paths.push(
+      '/Applications/WorkBuddy.app/Contents/MacOS/WorkBuddy',
+      '/Applications/WorkBuddyAI.app/Contents/MacOS/WorkBuddyAI',
+    )
+  } else if (process.platform === 'linux') {
+    paths.push(
+      '/opt/WorkBuddy/workbuddy',
+      '/usr/bin/workbuddy',
+      '/usr/local/bin/workbuddy',
+    )
+  }
+  return paths.filter(p => Boolean(p) && existsSync(p))
+}
+
+function getKeyInfo(desiredKeyId?: string): { key: Buffer; keyId: string } {
+  if (cachedKeyInfo && (!desiredKeyId || cachedKeyInfo.keyId === desiredKeyId)) {
+    return cachedKeyInfo
+  }
+  const defaultKey = createHash('sha256').update(DEFAULT_AT_REST_SECRET_KEY, 'utf8').digest()
+  const defaultKeyId = createHash('sha256').update(defaultKey).digest('hex').slice(0, 16)
+  if (!desiredKeyId || defaultKeyId === desiredKeyId) {
+    cachedKeyInfo = { key: defaultKey, keyId: defaultKeyId }
+    return cachedKeyInfo
+  }
+
+  try {
+    const { execFileSync } = require('node:child_process') as typeof import('node:child_process')
+    const candidates = getCandidateDesktopExecutables()
+    for (const exe of candidates) {
+      try {
+        const out = execFileSync(
+          exe,
+          ['-e', "process.stdout.write(process._linkedBinding('electron_browser_workbuddy_storage').loggerGet())"],
+          {
+            env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+            timeout: 3000,
+            windowsHide: true,
+          },
+        )
+        const parsed = JSON.parse(out.toString('utf8'))
+        if (parsed.atRestSecretKey) {
+          const k = createHash('sha256').update(parsed.atRestSecretKey, 'utf8').digest()
+          const kId = createHash('sha256').update(k).digest('hex').slice(0, 16)
+          if (!desiredKeyId || kId === desiredKeyId) {
+            cachedKeyInfo = { key: k, keyId: kId }
+            return cachedKeyInfo
+          }
+        }
+      } catch {}
+    }
+  } catch {}
+
+  cachedKeyInfo = { key: defaultKey, keyId: defaultKeyId }
+  return cachedKeyInfo
+}
+
+function buildFieldAAD(kId: string): Buffer {
+  const qe = Buffer.from('WB-AAD\0', 'ascii')
+  const g = (val: number) => {
+    const buf = Buffer.allocUnsafe(4)
+    buf.writeUInt32BE(val)
+    return buf
+  }
+  const _ = (str: string) => {
+    const buf = Buffer.from(str, 'utf8')
+    return Buffer.concat([g(buf.length), buf])
+  }
+  return Buffer.concat([
+    qe,
+    Buffer.from([1]),
+    _('WBEV1'),
+    _('sym-v1'),
+    g(1),
+    _(kId),
+    Buffer.from([2]),
+    Buffer.from([0]),
+    Buffer.from([0]),
+  ])
+}
+
+function decryptField(val: unknown): string {
+  if (typeof val === 'string') return val
+  if (typeof val !== 'object' || val === null || Array.isArray(val)) return ''
+  const obj = val as Record<string, unknown>
+  if (obj['$wbEncrypted'] !== 1 || typeof obj['envelope'] !== 'string') return ''
+  try {
+    const envelopeBuf = Buffer.from(obj['envelope'] as string, 'base64')
+    const parsedEnv = JSON.parse(envelopeBuf.toString('utf8'))
+    const keyInfo = getKeyInfo(parsedEnv.keyId)
+    const nonce = Buffer.from(parsedEnv.nonce, 'base64')
+    const authTag = Buffer.from(parsedEnv.authTag, 'base64')
+    const ciphertext = Buffer.from(parsedEnv.ciphertext, 'base64')
+    const decipher = createDecipheriv('aes-256-gcm', keyInfo.key, nonce, { authTagLength: 16 })
+    decipher.setAAD(buildFieldAAD(parsedEnv.keyId))
+    decipher.setAuthTag(authTag)
+    return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8')
+  } catch {
+    return ''
+  }
+}
 
 /** One parsed WorkBuddy credential. */
 export interface WorkBuddyCredential {
@@ -123,7 +252,9 @@ function expiryToMs(value: number): number {
 }
 
 function optionalString(value: unknown): string | undefined {
-  return typeof value === 'string' && value !== '' ? value : undefined
+  if (typeof value === 'string' && value !== '') return value
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+  return undefined
 }
 
 /**
@@ -154,8 +285,16 @@ export function parseWorkBuddyAuth(text: string, sourcePath: string): WorkBuddyC
     identity = document
   }
 
-  const accessToken = typeof auth['accessToken'] === 'string' ? auth['accessToken'] : ''
-  if (accessToken === '') return undefined
+  const accessToken = typeof auth['accessToken'] === 'string'
+    ? auth['accessToken']
+    : decryptField(auth['accessToken'])
+  if (!accessToken) return undefined
+  const rawRefreshToken = typeof auth['refreshToken'] === 'string'
+    ? auth['refreshToken']
+    : decryptField(auth['refreshToken'])
+  const rawNickname = typeof identity['nickname'] === 'string'
+    ? identity['nickname']
+    : decryptField(identity['nickname'])
 
   // Skip documents whose refresh window has already closed: they cannot recover.
   const refreshExpiresAtMs =
@@ -173,11 +312,11 @@ export function parseWorkBuddyAuth(text: string, sourcePath: string): WorkBuddyC
 
   return {
     accessToken,
-    refreshToken: typeof auth['refreshToken'] === 'string' ? auth['refreshToken'] : '',
+    refreshToken: rawRefreshToken || '',
     expiresAtMs: typeof auth['expiresAt'] === 'number' ? expiryToMs(auth['expiresAt']) : 0,
     ...refreshExpiresAtMs === undefined ? {} : { refreshExpiresAtMs },
     ...lastRefreshAtMs === undefined ? {} : { lastRefreshAtMs },
-    ...optionalString(identity['nickname']) === undefined ? {} : { nickname: optionalString(identity['nickname']) },
+    ...rawNickname ? { nickname: rawNickname } : {},
     ...optionalString(identity['uin']) === undefined ? {} : { uin: optionalString(identity['uin']) },
     ...optionalString(identity['uid']) === undefined ? {} : { uid: optionalString(identity['uid']) },
     ...optionalString(identity['enterpriseId']) === undefined
@@ -198,7 +337,7 @@ export function parseWorkBuddyAuth(text: string, sourcePath: string): WorkBuddyC
  * app itself is using.
  */
 function isLiveAuthFile(path: string): boolean {
-  return basename(path) === WORKBUDDY_LIVE_FILENAME
+  return WORKBUDDY_LIVE_FILENAMES.has(basename(path))
 }
 
 /**
