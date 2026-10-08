@@ -124,7 +124,7 @@ const DESKTOP_UA = 'WorkBuddy/5.5.2'
 const MODELS_CATALOG_PATH = '/v2/enterprises/personal/models'
 /** Global product config, which carries the international model roster. */
 const GLOBAL_CONFIG_PATH = '/v3/config'
-const JSON_TIMEOUT_MS = 30_000
+const JSON_TIMEOUT_MS = 10_000
 const ERROR_BODY_LIMIT = 4096
 
 /** Insufficient-credit markers, ASCII lowercase plus the original Chinese. */
